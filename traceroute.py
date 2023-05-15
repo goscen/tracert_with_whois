@@ -180,11 +180,7 @@ if __name__ == "__main__":
 
     try:
         ip = socket.gethostbyname(dest)
-    except IndexError:
-        raise IndexError("{} is invalid".format(dest))
-    except socket.gaierror:
-        raise UnicodeError("{} is invalid".format(dest))
-    except UnicodeError:
+    except Exception:
         print("{} is invalid".format(dest))
         sys.exit()
     traceroute = Traceroute(dest, length, hops, timeout)
