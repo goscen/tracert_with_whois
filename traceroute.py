@@ -1,11 +1,11 @@
 import argparse
 import os
+import re
 import select
 import socket
 import struct
 import sys
 import time
-
 import packet_crafter
 
 
@@ -28,10 +28,22 @@ class Traceroute:
             delay, reply, ip = self.trace()
             if ip is None:
                 print("{}. {}".format(str(self.ttl), "*"))
+                print()
                 self.ttl += 1
                 continue
             ip = socket.inet_ntoa(struct.pack("!I", ip))
             print("{}. {} {} ms".format(str(self.ttl), ip, str(delay)))
+            answer = self.whois_request(ip)
+            pr = ""
+            if answer == "local":
+                print("local")
+            else:
+                for i in answer:
+                    if i is not None:
+                        pr += str(i)
+                        pr += ", "
+                print(pr[0:len(pr) - 2])
+            print()
             self.ttl += 1
             if reply == self.packet_crafter.ICMP_ECHO_REPLY:
                 break
@@ -85,6 +97,74 @@ class Traceroute:
 
             return receive_time, type_of_reply, ip
 
+    def whois_request(self, ip: str):
+        if ip == "127.0.0.1":
+            return "local"
+
+        data = self.send_and_read_data(ip, "whois.arin.net")
+        if "PRIVATE-ADDRESS" and "IANA-RESERVED" in data:
+            return "local"
+        if re.findall(r"NetName:.+RIPE", data):
+            data = self.send_and_read_data(ip, "whois.ripe.net")
+            return self.parse_whois_request(data)
+        elif re.findall(r"NetName:.+LACNIC", data):
+            data = self.send_and_read_data(ip, "whois.lacnic.net")
+            return self.parse_whois_request(data)
+        elif re.findall(r"NetName:.+APNIC", data):
+            data = self.send_and_read_data(ip, "whois.apnic.net")
+            return self.parse_whois_request(data)
+        elif re.findall(r"NetName:.+AFRINIC", data):
+            data = self.send_and_read_data(ip, "whois.afrinic.net")
+            return self.parse_whois_request(data)
+        else:
+            return self.parse_whois_request(data)
+
+    @staticmethod
+    def send_and_read_data(ip, server):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect((server, 43))
+            s.sendall((ip + "\r\n").encode())
+            buff = b""
+            while True:
+                data = s.recv(1024)
+                if not data:
+                    break
+                buff += data
+        return buff.decode("utf-8", errors="ignore")
+
+    def parse_whois_request(self, data):
+        data = data.lower()
+        re_for_netname = re.findall(r"netname:.+\n", data)
+        re_for_as = re.findall(r"origin:.+\n", data)
+        re_for_country = re.findall(r"country:.+\n", data)
+
+        if re_for_netname:
+            name = re_for_netname[0][16:len(re_for_netname[0])].split("\n")[0]
+        else:
+            name = None
+
+        if re_for_country:
+            country = re_for_country[0][16:len(re_for_netname[0])].split("\n")[0]
+            if country == "eu":
+                country = None
+        else:
+            country = None
+
+        if re_for_as:
+            a_system = re_for_as[0][18:len(re_for_netname[0])].split("\n")[0]
+            if a_system == "":
+                a_system = None
+
+        else:
+            re_for_as = re.findall(r"originas:.+.+\n", data)
+            if re_for_as:
+                a_system = re_for_as[0][18:len(re_for_as[0])].split("\n")[0]
+                if a_system == "":
+                    a_system = None
+            else:
+                a_system = None
+        return name, a_system, country
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -101,11 +181,11 @@ if __name__ == "__main__":
     try:
         ip = socket.gethostbyname(dest)
     except IndexError:
-        raise IndexError("addr not given")
+        raise IndexError("{} is invalid".format(dest))
     except socket.gaierror:
-        raise UnicodeError("addr not correct")
+        raise UnicodeError("{} is invalid".format(dest))
     except UnicodeError:
-        print("addr not correct")
+        print("{} is invalid".format(dest))
         sys.exit()
     traceroute = Traceroute(dest, length, hops, timeout)
     traceroute.start_trace()
